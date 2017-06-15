@@ -1,4 +1,4 @@
-FROM python:3.5
+FROM openjdk:8-jre-alpine
 MAINTAINER Robson Júnior <bsao@cerebello.co> (@bsao)
 
 ###########################################
@@ -13,21 +13,22 @@ ARG SPARK_UID=7000
 ARG SPARK_GID=7000
 ENV SPARK_USER=${SPARK_USER}
 ENV SPARK_GROUP=${SPARK_GROUP}
-RUN groupadd --gid=${SPARK_GID} ${SPARK_GROUP}
-RUN useradd --uid=${SPARK_UID} --gid=${SPARK_GID} --no-create-home ${SPARK_USER}
+ENV SPARK_UID=${SPARK_UID}
+ENV SPARK_GID=${SPARK_GID}
+RUN addgroup -g ${SPARK_GID} -S ${SPARK_GROUP} && \
+    adduser -u ${SPARK_UID} -D -S -G ${SPARK_USER} ${SPARK_GROUP}
 
 ###########################################
 #### ENV VERSIONS
 ###########################################
-ARG JAVA_MAJOR_VERSION=8
 ARG SPARK_VERSION=2.1.1
 ARG MAJOR_HADOOP_VERSION=2.7
 ARG SPARK_HOME=/opt/spark
 ENV SPARK_VERSION ${SPARK_VERSION}
 ENV MAJOR_HADOOP_VERSION ${MAJOR_HADOOP_VERSION}
 ENV SPARK_HOME ${SPARK_HOME}
-ENV PYSPARK_PYTHON=python3
-ENV JAVA_HOME /usr/lib/jvm/java-${JAVA_MAJOR_VERSION}-oracle
+ENV PYTHON_ALPINE_VERSION="3.5.2-r9"
+ENV PYSPARK_PYTHON=/usr/bin/python3
 LABEL name="SPARK" version=${SPARK_VERSION}
 
 ###########################################
@@ -39,44 +40,43 @@ ENV PYTHONIOENCODING="UTF-8"
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 ###########################################
-#### INSTALL JAVA AND ESSENTIAL PKGS
+#### DIRECTORIES
 ###########################################
-RUN \
-  echo oracle-java${JAVA_MAJOR_VERSION}-installer shared/accepted-oracle-license-v1-1 select true | debconf-set-selections && \
-  echo "deb http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main" | \
-    tee /etc/apt/sources.list.d/webupd8team-java.list && \
-  echo "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main" | \
-    tee -a /etc/apt/sources.list.d/webupd8team-java.list && \
-  apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys EEA14886 && \
-  apt-get update && \
-  apt-get -y upgrade && \
-  apt-get install -y oracle-java${JAVA_MAJOR_VERSION}-installer oracle-java${JAVA_MAJOR_VERSION}-set-default && \
-  rm -rf /var/lib/apt/lists/* && \
-  rm -rf /var/cache/oracle-jdk${JAVA_MAJOR_VERSION}-installer
+RUN mkdir -p ${SPARK_HOME}
 
 ###########################################
-#### INSTALL PIP
+#### INSTALL PYTHON AND DEPENDENCIES
 ###########################################
-RUN wget https://bootstrap.pypa.io/get-pip.py && \
-    python get-pip.py && \
-    rm -rf get-pip.py
+RUN echo 'http://dl-cdn.alpinelinux.org/alpine/v3.5/main' >> /etc/apk/repositories && \
+    apk add --update --no-cache \
+    'python3=='${PYTHON_ALPINE_VERSION} libstdc++ lapack-dev \
+    bash tar shadow wget build-base && \
+    apk add --no-cache --virtual=.build-dependencies g++ gfortran musl-dev 'python3-dev=='${PYTHON_ALPINE_VERSION} && \
+    python3 -m ensurepip && \
+    rm -r /usr/lib/python*/ensurepip && \
+    pip3 install --upgrade pip setuptools && \
+    if [ ! -e /usr/bin/pip ]; then ln -s pip3 /usr/bin/pip ; fi && \
+    ln -s locale.h /usr/include/xlocale.h && \
+    /usr/bin/python3 --version && \
+    /usr/bin/pip install numpy pandas pandasql scipy scikit-learn && \
+    find /usr/lib/python3.*/ -name 'tests' -exec rm -r '{}' + && \
+    rm /usr/include/xlocale.h && \
+    rm -r /root/.cache && \
+    apk del .build-dependencies
 
 ###########################################
 #### INSTALL SPARK
 ###########################################
-RUN mkdir -p ${SPARK_HOME}
 RUN wget http://d3kbcqa49mib13.cloudfront.net/spark-${SPARK_VERSION}-bin-hadoop${MAJOR_HADOOP_VERSION}.tgz && \
     tar -xvf spark-${SPARK_VERSION}-bin-hadoop${MAJOR_HADOOP_VERSION}.tgz -C ${SPARK_HOME} --strip=1 && \
-    rm -rf spark-${SPARK_VERSION}-bin-hadoop${MAJOR_HADOOP_VERSION}.tgz
-RUN chown -R ${SPARK_USER}:${SPARK_GROUP} ${SPARK_HOME}
-RUN chmod -R g+rwx ${SPARK_HOME}
+    rm -rf spark-${SPARK_VERSION}-bin-hadoop${MAJOR_HADOOP_VERSION}.tgz && \
+    chown -R ${SPARK_USER}:${SPARK_GROUP} ${SPARK_HOME} && \
+    chmod -R g+rwx ${SPARK_HOME}
 
 ##########################################
 ### PORTS
 ##########################################
-EXPOSE 7077
-EXPOSE 4040
-EXPOSE 8080
+EXPOSE 7077 4040 8080
 
 ##########################################
 ### ENTRYPOINT
